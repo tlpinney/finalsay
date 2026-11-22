@@ -1,0 +1,5 @@
+/.lake
+/.direnv
+.finalsay/
+node_modules/
+__pycache__/

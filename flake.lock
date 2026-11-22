@@ -1,0 +1,44 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1795249095,
+        "narHash": "sha256-8JDgyVvWUZg5m9hNlL8Ge9aT647ng3Ukc8NPMiKNTPQ=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "93a9ed0a866099a230ed5146a5bb7d16fd5c9b14",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "sandbox-runtime": "sandbox-runtime"
+      }
+    },
+    "sandbox-runtime": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794522845,
+        "narHash": "sha256-t+Xky8dJXu11C9Zdl2dAWl5FryYGbZDTdxVTm3xOfNc=",
+        "owner": "anthropics",
+        "repo": "sandbox-runtime",
+        "rev": "0bbebed0aa9a8e628dc4df8bc30293550a1988eb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "anthropics",
+        "repo": "sandbox-runtime",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}
