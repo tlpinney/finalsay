@@ -5,8 +5,12 @@ import FinalSay.World
 import FinalSay.Trace
 import FinalSay.Agent
 import FinalSay.Demo
+import FinalSay.Fixtures
+import FinalSay.Config
 import FinalSay.Authority
 import FinalSay.Conservation
 import FinalSay.Delegation
 import FinalSay.Barrier
 import FinalSay.Frontier
+import FinalSay.System
+import FinalSay.SrtConfig
