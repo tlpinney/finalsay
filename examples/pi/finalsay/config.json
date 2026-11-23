@@ -1,0 +1,228 @@
+{
+  "tierMap": {
+    "trustHints": false,
+    "entries": [
+      {
+        "action": "inbox.read",
+        "tier": "reversible",
+        "observable": false,
+        "readsPrivate": true,
+        "readsUntrusted": true,
+        "note": "your mail is private, and anyone can write to you"
+      },
+      {
+        "action": "email.draft",
+        "tier": "reversible",
+        "observable": false,
+        "note": "only you can see drafts"
+      },
+      {
+        "action": "email.send",
+        "tier": "irreversible"
+      },
+      {
+        "action": "calendar.create",
+        "tier": "compensatable",
+        "compensation": "calendar.delete",
+        "note": "observable: attendees are notified, even if the event is deleted later"
+      },
+      {
+        "action": "code.run",
+        "tier": "reversible",
+        "observable": false,
+        "note": "the script itself does nothing outside; every call it makes is governed separately"
+      },
+      {
+        "action": "file.read",
+        "tier": "reversible",
+        "observable": false
+      },
+      {
+        "action": "file.search",
+        "tier": "reversible",
+        "observable": false
+      },
+      {
+        "action": "file.write",
+        "tier": "reversible",
+        "observable": false,
+        "note": "reversible only if the working tree is under git or checkpointed"
+      },
+      {
+        "action": "file.edit",
+        "tier": "reversible",
+        "observable": false,
+        "note": "reversible only if the working tree is under git or checkpointed"
+      },
+      {
+        "action": "shell.exec",
+        "tier": "reversible",
+        "note": "reversible ONLY when bash runs under srt with examples/pi/srt-settings.json (writes confined to the project, .git and auto-run config denied) AND a checkpoint is kept outside the project (examples/pi/checkpoint.sh). Observable (the default) unless the network allowlist is empty. Without that sandbox, delete this entry: unknown actions are irreversible."
+      },
+      {
+        "action": "file.write.vcs",
+        "tier": "irreversible",
+        "note": "writes into .git can destroy the history rollback depends on"
+      },
+      {
+        "action": "file.write.exec",
+        "tier": "irreversible",
+        "note": "files something outside the sandbox runs later: an edge to your full permissions. Covers run-later config at ANY depth (matched by path segment), including other agents' project config dirs \u2014 a sandbox that only protects <root>/.codex misses a nested one; this does not."
+      }
+    ]
+  },
+  "policy": [
+    {
+      "name": "no-outbound-when-tainted",
+      "effect": "deny",
+      "when": {
+        "op": "and",
+        "args": [
+          {
+            "op": "tainted"
+          },
+          {
+            "op": "actionIs",
+            "action": "email.send"
+          }
+        ]
+      }
+    },
+    {
+      "name": "reversible-ok",
+      "effect": "allow",
+      "when": {
+        "op": "tierIs",
+        "tier": "reversible"
+      }
+    },
+    {
+      "name": "calendar-ok",
+      "effect": "allow",
+      "when": {
+        "op": "actionIs",
+        "action": "calendar.create"
+      }
+    }
+  ],
+  "actions": {
+    "inbox_read": "inbox.read",
+    "email_draft": "email.draft",
+    "email_send": "email.send",
+    "calendar_create": "calendar.create",
+    "codemode": "code.run",
+    "read": "file.read",
+    "grep": "file.search",
+    "find": "file.search",
+    "ls": "file.search",
+    "write": "file.write",
+    "edit": "file.edit",
+    "bash": "shell.exec"
+  },
+  "pathRules": [
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".git",
+      "action": "file.write.vcs"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".github",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".husky",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".vscode",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".pi",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "basename": ".envrc",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "basename": ".pre-commit-config.yaml",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "basename": ".gitmodules",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".codex",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".cursor",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".agents",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".claude",
+      "action": "file.write.exec"
+    },
+    {
+      "tools": [
+        "write",
+        "edit"
+      ],
+      "segment": ".opencode",
+      "action": "file.write.exec"
+    }
+  ]
+}

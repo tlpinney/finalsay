@@ -1,0 +1,15 @@
+{
+  "license": "MIT OR Apache-2.0",
+  "name": "finalsay-pi",
+  "private": true,
+  "type": "module",
+  "description": "finalsay for pi: let reversibility decide who decides",
+  "scripts": {
+    "test": "node test/fixtures.test.ts ../../../fixtures/fixtures.json && node test/paths.test.ts && node test/session.test.ts"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

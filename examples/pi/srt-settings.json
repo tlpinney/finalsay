@@ -1,0 +1,19 @@
+{
+  "network": {
+    "allowedDomains": [],
+    "deniedDomains": []
+  },
+  "filesystem": {
+    "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gog", "~/.pi/agent/auth.json"],
+    "allowWrite": [".", "/tmp"],
+    "denyWrite": [
+      ".git",
+      ".envrc",
+      ".github",
+      ".husky",
+      ".pre-commit-config.yaml",
+      ".pi",
+      ".env", ".env.*", "*.pem", "*.key"
+    ]
+  }
+}
