@@ -1,0 +1,18 @@
+{"network": {"deniedDomains": [], "allowedDomains": []},
+ "filesystem":
+ {"denyWrite":
+  ["**/.git",
+   "**/.codex",
+   "**/.cursor",
+   "**/.agents",
+   "**/.claude",
+   "**/.pi",
+   "**/.opencode",
+   "**/.github",
+   "**/.husky",
+   "**/.vscode",
+   "**/.envrc",
+   "**/.gitmodules",
+   "**/.pre-commit-config.yaml"],
+  "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"],
+  "allowWrite": ["PROJ", "/tmp"]}}
