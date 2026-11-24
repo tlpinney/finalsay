@@ -1,6 +1,6 @@
 # Let reversibility decide who decides
 
-*A position paper on authority for AI agents, written informally.*
+*A working paper on authority for AI agents, written informally.*
 
 Travis Pinney · November 2026
 
@@ -441,7 +441,7 @@ Compensation as a defined counteraction is the saga pattern [[Garcia-Molina & Sa
 - **The examples aren't hardened products.** The pi gate writes its trace inside its own process, the approval prompt shows a truncated view of the call, and labels for the exposure rule exist only for the toy tools.
 - **The literature moves fast.** The comparison in §4 is with six systems read closely; §8 is broader but not exhaustive.
 
-**What an evaluation would need to show.** This is a position paper; a systems version would need at least:
+**What an evaluation would need to show.** This is a working paper; a systems version would need at least:
 - **Attack resistance.** An injection benchmark (AgentDojo or similar) and a suite of run-later-write attacks, run with and without the inner gate and the outer sandbox. The suite should include the path spellings above.
 - **Cost to the user.** Approval prompts per task and task completion, especially once the exposure rule escalates everything observable. Approval fatigue is the obvious way this design fails in practice: a human who approves everything is not an authority.
 - **False denials.** Legitimate edits the outer deny list blocks.
