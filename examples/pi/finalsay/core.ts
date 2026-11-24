@@ -71,6 +71,14 @@ export interface Config {
   /** Tool name → action name. Unmapped tools use their own name (and are unknown). */
   actions?: Record<string, string>;
   pathRules?: PathRule[];
+  /** Action for a path-ruled tool writing outside the project root (default
+   *  "file.write.outside"; unmapped actions are irreversible). The checkpoint only
+   *  covers the project, so nothing outside it can be undone. */
+  outsideAction?: string;
+  /** Action for a path-ruled tool writing inside a git repo nested in the project
+   *  (default "file.write.nested-repo"): the checkpoint stores nested repos as a
+   *  pointer, not their files, so it can't restore them. */
+  nestedRepoAction?: string;
 }
 
 /** Which action a path rule assigns, given an already-normalized (lowercased) path. */
@@ -171,6 +179,19 @@ export type TraceEvent =
   | { call: { c: Record<string, unknown> } }
   | { handoff: { src: string; dst: string; schema: "freeText" | { structured: { bits: number } }; bytes: number } };
 
+/** How the gate sees paths (see paths.ts `makePaths`). `normalize` gives the
+ *  lowercased real path to classify; `resolve` gives the real path, which the gate
+ *  writes back into the call so the tool opens what was classified; `inside` says
+ *  whether a path is in the project (else `outsideAction`); `nestedRepo` whether it
+ *  is in a git repo nested inside the project, which the checkpoint can't restore
+ *  (else `nestedRepoAction`). */
+export interface Paths {
+  normalize: (path: string) => string;
+  resolve?: (path: string) => string;
+  inside?: (path: string) => boolean;
+  nestedRepo?: (path: string) => boolean;
+}
+
 export class Gate {
   private env = new Map<string, Exposure>();
   /** Code-mode calls that were allowed: call id → (parent context, run context). */
@@ -180,20 +201,20 @@ export class Gate {
   private sink: (e: TraceEvent) => void;
   private who: { principal: string; agent: string };
   private hintOf: (toolName: string) => Tier | null;
-  private normalize: (path: string) => string;
+  private paths: Paths;
 
   constructor(
     cfg: Config,
     sink: (e: TraceEvent) => void,
     who = { principal: "user:me", agent: "pi" },
     hintOf: (toolName: string) => Tier | null = () => null,
-    normalize: (path: string) => string = (p) => p.toLowerCase(),
+    paths: Paths = { normalize: (p) => p.toLowerCase() },
   ) {
     this.cfg = cfg;
     this.sink = sink;
     this.who = who;
     this.hintOf = hintOf;
-    this.normalize = normalize;
+    this.paths = paths;
   }
 
   exposure(ctx: string): Exposure {
@@ -208,8 +229,16 @@ export class Gate {
 
   actionOf(toolName: string, input: Record<string, unknown> = {}): string {
     if (this.cfg.pathRules && typeof input.path === "string") {
-      const a = pathAction(this.cfg.pathRules, toolName, this.normalize(input.path));
+      const norm = this.paths.normalize(input.path);
+      const a = pathAction(this.cfg.pathRules, toolName, norm);
       if (a) return a;
+      const ruled = this.cfg.pathRules.some((r) => r.tools.includes(toolName));
+      if (ruled && this.paths.inside && !this.paths.inside(input.path)) {
+        return this.cfg.outsideAction ?? "file.write.outside";
+      }
+      if (ruled && this.paths.nestedRepo?.(input.path)) {
+        return this.cfg.nestedRepoAction ?? "file.write.nested-repo";
+      }
     }
     return this.cfg.actions?.[toolName] ?? toolName;
   }
@@ -226,6 +255,10 @@ export class Gate {
     const ctx = this.contextOf(ev.parentToolCallId);
     const x = this.exposure(ctx);
     const action = this.actionOf(ev.toolName, ev.input);
+    // Pin the path: the tool opens the real path that was classified.
+    if (this.paths.resolve && typeof ev.input.path === "string") {
+      ev.input.path = this.paths.resolve(ev.input.path);
+    }
     const hint = tierMap.trustHints ? this.hintOf(ev.toolName) : null;
     const amount = Number.isInteger(ev.input.amount) && (ev.input.amount as number) >= 0 ? (ev.input.amount as number) : 0;
     const req: Request = {

@@ -4,16 +4,34 @@
     "deniedDomains": []
   },
   "filesystem": {
-    "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg", "~/.config/gog", "~/.pi/agent/auth.json"],
-    "allowWrite": [".", "/tmp"],
+    "denyRead": [
+      "~/.ssh",
+      "~/.aws",
+      "~/.gnupg",
+      "~/.config/gog",
+      "~/.pi/agent/auth.json"
+    ],
+    "allowWrite": [
+      "."
+    ],
     "denyWrite": [
-      ".git",
-      ".envrc",
-      ".github",
-      ".husky",
-      ".pre-commit-config.yaml",
-      ".pi",
-      ".env", ".env.*", "*.pem", "*.key"
+      "**/.git",
+      "**/.github",
+      "**/.husky",
+      "**/.vscode",
+      "**/.pi",
+      "**/.envrc",
+      "**/.pre-commit-config.yaml",
+      "**/.gitmodules",
+      "**/.codex",
+      "**/.cursor",
+      "**/.agents",
+      "**/.claude",
+      "**/.opencode",
+      "**/.env",
+      "**/.env.*",
+      "**/*.pem",
+      "**/*.key"
     ]
   }
 }

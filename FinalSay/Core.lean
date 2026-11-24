@@ -10,7 +10,9 @@ namespace FinalSay
 
 /-- Reversibility class of an action. -/
 inductive Tier where
-  /-- Exact prior state can be restored with no trace. The agent decides. -/
+  /-- Can still be prevented, or the state that matters restored, from inside the
+  boundary, before anything outside it the owner doesn't control acts on it (an
+  audit log entry doesn't count against this). The agent decides. -/
   | reversible
   /-- Can't be undone, but a declared compensating action counteracts it. Policy decides. -/
   | compensatable
@@ -45,6 +47,9 @@ structure Request where
   tainted   : Bool := false
   /-- Amount involved, e.g. a refund in dollars. -/
   amount    : Nat := 0
+  /-- The specific effect this request is, once a gate has assigned it an id
+  (run, key). `none` outside a gate. Approvals bind to it (`FinalSay.Authority`). -/
+  eff       : Option (Nat × Nat) := none
   deriving Repr
 
 /-- A tiny condition language, so policies are data and proofs cover all of them. -/

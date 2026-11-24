@@ -18,7 +18,7 @@ namespace FinalSay.SystemFixtures
 open Lean FinalSay
 
 instance : Inhabited SOp := ⟨.tick⟩
-instance : Inhabited Approval := ⟨{ id := 0, target := ⟨"", "", 0⟩, approver := "", expires := 0 }⟩
+instance : Inhabited Approval := ⟨{ id := 0, target := ⟨"", "", 0, none⟩, approver := "", expires := 0 }⟩
 
 /-! ### JSON encoders -/
 
@@ -26,9 +26,13 @@ def tierJson (t : Tier) : Json := Json.str t.name
 
 def effJson (id : EffId) : Json := Json.arr #[toJson id.1, toJson id.2]
 
+def optEff : Option EffId → Json
+  | some id => effJson id
+  | none => Json.null
+
 def targetJson (t : Target) : Json :=
   Json.mkObj [("action", Json.str t.action), ("resource", Json.str t.resource),
-              ("amount", toJson t.amount)]
+              ("amount", toJson t.amount), ("eff", optEff t.eff)]
 
 def requestJson (r : Request) : Json :=
   Json.mkObj [("principal", Json.str r.principal), ("agent", Json.str r.agent),
@@ -90,6 +94,18 @@ def rootScope : Scope :=
     resources := ["acct", "sandbox"], maxAmount := 1000, expires := 100 }
 def rootAgent : Holder := ⟨"agent", 800, []⟩
 
+/-- The owner's classification. Proposals may claim any tier; the system uses this. -/
+def tierMap : TierMap :=
+  { entries := [{ action := "bank.refund", tier := .irreversible },
+                { action := "notes.write", tier := .reversible, observable := false },
+                { action := "calendar.create_event", tier := .compensatable,
+                  compensation := some "calendar.delete_event" },
+                { action := "email.send", tier := .irreversible }] }
+
+def entryJson (e : Entry) : Json :=
+  Json.mkObj [("action", Json.str e.action), ("tier", tierJson e.tier),
+              ("compensation", match e.compensation with | some c => Json.str c | none => Json.null)]
+
 def mk (action resource : String) (tier : Tier) (amount : Nat) : Request :=
   { principal := root, agent := "agent", action, resource, tier, amount }
 
@@ -105,6 +121,7 @@ def policies : List (String × Policy) := [
                               ⟨"events", .allow, .actionIs "calendar.create_event"⟩]),
   ("deny-email", [⟨"notes", .allow, .actionIs "notes.write"⟩,
                   ⟨"no-email", .deny, .actionIs "email.send"⟩]),
+  ("allow-reversible", [⟨"rev-ok", .allow, .tierIs .reversible⟩]),
   ("empty", [])
 ]
 
@@ -123,6 +140,9 @@ def approvals : List Approval := [
   { id := 6, target := refundBig.target, approver := "agent:helper", expires := 8 }
 ]
 
+/-- An approval for effect `id`: approvals bind to one effect. -/
+def bindTo (a : Approval) (id : EffId) : Approval := { a with target := { a.target with eff := some id } }
+
 def runs : List Nat := [1, 2]
 def keys : List Nat := [0, 1, 2]
 def ids : List EffId := runs.flatMap fun r => keys.map fun k => (r, k)
@@ -136,31 +156,33 @@ def pool : Array (List SOp) := Id.run do
     for (r, i) in requests.zipIdx do
       out := out.push [.propose ⟨id, i % 2, r⟩]
       out := out.push [.propose ⟨id, i % 2, r⟩, .deliver id]
+      -- the proposer claims the wrong tier; the system must ignore it
+      out := out.push [.propose ⟨id, i % 2, { r with tier := .reversible }⟩, .deliver id]
     out := out.push [.approve id]
     out := out.push [.reject id]
     out := out.push [.deliver id]
     out := out.push [.retry id]
     for a in approvals do
-      out := out.push [.grant a, .approve id, .deliver id]
+      out := out.push [.grant (bindTo a id), .approve id, .deliver id]
     out := out.push [.delegate 5 root "user:mgr" mgrScope none,
                      .delegate 6 "user:mgr" "agent:helper" helperScope (some 5),
-                     .propose ⟨id, 0, refundSmall⟩, .grant (approvals[2]!), .approve id, .deliver id]
+                     .propose ⟨id, 0, refundSmall⟩, .grant (bindTo approvals[2]! id), .approve id, .deliver id]
     -- targeted flows: cascade, fence (approval and delegation), bind, fork
     out := out.push [.delegate 5 root "user:mgr" mgrScope none,
                      .delegate 6 "user:mgr" "agent:helper" helperScope (some 5), .revokeDelegation 5,
-                     .propose ⟨id, 0, refundSmall⟩, .grant (approvals[2]!), .approve id, .deliver id]
-    out := out.push [.propose ⟨id, 0, refundBig⟩, .grant (approvals[0]!), .approve id,
+                     .propose ⟨id, 0, refundSmall⟩, .grant (bindTo approvals[2]! id), .approve id, .deliver id]
+    out := out.push [.propose ⟨id, 0, refundBig⟩, .grant (bindTo approvals[0]! id), .approve id,
                      .revokeApproval 1, .deliver id]
     out := out.push [.delegate 5 root "user:mgr" mgrScope none, .propose ⟨id, 0, refundSmall⟩,
-                     .grant (approvals[1]!), .approve id, .revokeDelegation 5, .deliver id]
+                     .grant (bindTo approvals[1]! id), .approve id, .revokeDelegation 5, .deliver id]
     out := out.push [.propose ⟨id, 0, note⟩, .deliver id, .retry id, .deliver id]
     out := out.push [.delegate 5 root "user:mgr" mgrScope none,
                      .delegate 7 "user:mgr" "agent:helper" rootScope (some 5),
-                     .propose ⟨id, 0, refundBig⟩, .grant (approvals[5]!), .approve id, .deliver id]
-    out := out.push [.fork 0 "sub" 300, .grant (approvals[0]!), .propose ⟨id, 1, refundBig⟩,
+                     .propose ⟨id, 0, refundBig⟩, .grant (bindTo approvals[5]! id), .approve id, .deliver id]
+    out := out.push [.fork 0 "sub" 300, .grant (bindTo approvals[0]! id), .propose ⟨id, 1, refundBig⟩,
                      .deliver id]
   for a in approvals do
-    out := out.push [.grant a]
+    out := out.push [.grant (bindTo a (1, 0))]
     out := out.push [.revokeApproval a.id]
   for r in runs do
     out := out.push [.cancel r]
@@ -196,42 +218,48 @@ def named : List (String × String × List SOp) := [
   ("sibling-held-behind-ask", "allow-notes",
     [.propose ⟨(1, 0), 0, refundBig⟩, .propose ⟨(1, 1), 0, note⟩, .deliver (1, 1)]),
   ("revoke-in-flight", "allow-notes",
-    [.propose ⟨(1, 0), 0, refundBig⟩, .grant (approvals[0]!), .approve (1, 0),
+    [.propose ⟨(1, 0), 0, refundBig⟩, .grant (bindTo approvals[0]! (1, 0)), .approve (1, 0),
      .revokeApproval 1, .deliver (1, 0)]),
   ("redelivery-once", "allow-notes",
     [.propose ⟨(1, 0), 0, note⟩, .deliver (1, 0), .retry (1, 0), .deliver (1, 0)]),
   ("unauthorized-approver", "allow-notes",
-    [.propose ⟨(1, 0), 0, refundSmall⟩, .grant (approvals[4]!), .approve (1, 0), .deliver (1, 0)]),
+    [.propose ⟨(1, 0), 0, refundSmall⟩, .grant (bindTo approvals[4]! (1, 0)), .approve (1, 0), .deliver (1, 0)]),
   ("expired-approval", "allow-notes",
-    [.propose ⟨(1, 0), 0, refundBig⟩, .grant (approvals[0]!), .tick, .tick, .tick, .tick, .tick,
+    [.propose ⟨(1, 0), 0, refundBig⟩, .grant (bindTo approvals[0]! (1, 0)), .tick, .tick, .tick, .tick, .tick,
      .tick, .tick, .tick, .approve (1, 0), .deliver (1, 0)]),
   ("single-use-not-reused", "allow-notes",
-    [.grant (approvals[0]!), .propose ⟨(1, 0), 0, refundBig⟩, .propose ⟨(2, 0), 0, refundBig⟩,
+    [.grant (bindTo approvals[0]! (1, 0)), .propose ⟨(1, 0), 0, refundBig⟩, .propose ⟨(2, 0), 0, refundBig⟩,
      .deliver (1, 0), .deliver (2, 0)]),
   ("budget-across-fork", "allow-notes",
-    [.fork 0 "sub" 300, .grant { approvals[0]! with oneShot := false },
+    [.fork 0 "sub" 300, .grant (bindTo approvals[0]! (1, 0)), .grant (bindTo { approvals[0]! with id := 7 } (2, 0)),
      .propose ⟨(1, 0), 0, refundBig⟩, .propose ⟨(2, 0), 1, refundBig⟩]),
   ("cancel-fences", "allow-notes",
     [.propose ⟨(1, 0), 0, refundBig⟩, .propose ⟨(1, 1), 0, note⟩, .cancel 1,
-     .propose ⟨(1, 2), 0, note⟩, .grant (approvals[0]!), .approve (1, 0)]),
+     .propose ⟨(1, 2), 0, note⟩, .grant (bindTo approvals[0]! (1, 0)), .approve (1, 0)]),
   ("chain-revoked-above", "allow-notes",
     [.delegate 5 root "user:mgr" mgrScope none,
      .delegate 6 "user:mgr" "agent:helper" helperScope (some 5),
-     .propose ⟨(1, 0), 0, refundSmall⟩, .grant (approvals[2]!), .approve (1, 0),
+     .propose ⟨(1, 0), 0, refundSmall⟩, .grant (bindTo approvals[2]! (1, 0)), .approve (1, 0),
      .revokeDelegation 5, .deliver (1, 0)]),
   ("cascade-revoked-before-use", "allow-notes",
     [.delegate 5 root "user:mgr" mgrScope none,
      .delegate 6 "user:mgr" "agent:helper" helperScope (some 5), .revokeDelegation 5,
-     .propose ⟨(1, 0), 0, refundSmall⟩, .grant (approvals[2]!), .approve (1, 0), .deliver (1, 0)]),
+     .propose ⟨(1, 0), 0, refundSmall⟩, .grant (bindTo approvals[2]! (1, 0)), .approve (1, 0), .deliver (1, 0)]),
   ("forked-agent-over-budget", "allow-notes",
-    [.fork 0 "sub" 300, .grant (approvals[0]!), .propose ⟨(1, 0), 1, refundBig⟩, .deliver (1, 0)]),
+    [.fork 0 "sub" 300, .grant (bindTo approvals[0]! (1, 0)), .propose ⟨(1, 0), 1, refundBig⟩, .deliver (1, 0)]),
   ("amplifying-delegation-refused", "allow-notes",
     [.delegate 5 root "user:mgr" mgrScope none,
      .delegate 7 "user:mgr" "agent:helper" rootScope (some 5),
-     .propose ⟨(1, 0), 0, refundSmall⟩, .grant (approvals[2]!), .approve (1, 0), .deliver (1, 0)])
+     .propose ⟨(1, 0), 0, refundSmall⟩, .grant (bindTo approvals[2]! (1, 0)), .approve (1, 0), .deliver (1, 0)]),
+  ("spoofed-tier", "allow-reversible",
+    [.propose ⟨(1, 0), 0, { refundBig with tier := .reversible }⟩, .deliver (1, 0)]),
+  ("approval-capture", "allow-notes",
+    [.fork 0 "sub" 300, .propose ⟨(1, 0), 0, refundSmall⟩, .propose ⟨(2, 0), 1, refundSmall⟩,
+     .grant (bindTo approvals[0]! (1, 0)), .grant (bindTo approvals[1]! (1, 0)),
+     .approve (2, 0), .approve (1, 0), .deliver (2, 0), .deliver (1, 0)])
 ]
 
-def fresh : System := System.fresh root rootScope rootAgent
+def fresh : System := System.fresh tierMap root rootScope rootAgent
 
 def caseJson (id pname : String) (p : Policy) (ops : List SOp) : Json :=
   Json.mkObj [("id", Json.str id), ("policy", Json.str pname),
@@ -253,6 +281,7 @@ def cases (n : Nat) : Array Json := Id.run do
 
 def config : Json :=
   Json.mkObj [("root", Json.str root), ("rootScope", scopeJson rootScope),
+              ("tierMap", Json.arr (tierMap.entries.map entryJson).toArray),
               ("agent", Json.mkObj [("name", Json.str rootAgent.name),
                                     ("budget", toJson rootAgent.budget)])]
 

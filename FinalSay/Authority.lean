@@ -39,9 +39,13 @@ structure Target where
   action   : String
   resource : String
   amount   : Nat
+  /-- The one effect (run, key) this covers, when a gate has assigned ids. Binding to
+  the id, not just to (action, resource, amount), stops another identical request,
+  e.g. from a forked sub-agent, from consuming an approval granted for this one. -/
+  eff      : Option (Nat × Nat) := none
   deriving Repr, DecidableEq
 
-def Request.target (r : Request) : Target := ⟨r.action, r.resource, r.amount⟩
+def Request.target (r : Request) : Target := ⟨r.action, r.resource, r.amount, r.eff⟩
 
 /-- An approval from someone with authority, bound to one exact effect. -/
 structure Approval where

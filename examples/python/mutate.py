@@ -55,6 +55,22 @@ def no_attenuation(a, b):
     return True
 
 
+def trust_claimed_tier(self, request, i):
+    return dict(request, eff=list(i))
+
+
+def unbound_approval(self, req, a):
+    def strip(t):
+        return {k: v for k, v in t.items() if k != "eff"}
+    return (strip(a["target"]) == strip(composed.target(req)) and self.now < a["expires"]
+            and a["id"] not in self.revoked and not (a["oneShot"] and a["id"] in self.used))
+
+
+def ignore_expiry(self, req, a):
+    return (a["target"] == composed.target(req)
+            and a["id"] not in self.revoked and not (a["oneShot"] and a["id"] in self.used))
+
+
 # (name, owner, attribute, replacement, equivalent?)
 MUTANTS = [
     ("no provider fence", composed.Provider, "revoke", nofence, False),
@@ -65,6 +81,9 @@ MUTANTS = [
     ("copy-on-fork", composed.Pop, "fork", copy_on_fork, False),
     ("single-use ignored", composed.Store, "valid_for", reuse_single_use, False),
     ("no attenuation check", composed, "within", no_attenuation, False),
+    ("proposer's tier trusted", composed.System, "classify", trust_claimed_tier, False),
+    ("approval not bound to effect", composed.Store, "valid_for", unbound_approval, False),
+    ("expiry ignored", composed.Store, "valid_for", ignore_expiry, False),
     # Equivalent by design: the commit-time check already refuses anything a
     # revoked approval or delegation backed, so the provider's own refusal at
     # dispatch is defence in depth and changes no outcome. Proved in Lean as

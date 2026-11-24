@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Config, Gate, type Tier, type TraceEvent } from "./core.ts";
-import { normalizePath } from "./paths.ts";
+import { makePaths } from "./paths.ts";
 
 function loadConfig(): { cfg: Config; path: string } {
   const here = dirname(fileURLToPath(import.meta.url));
@@ -102,7 +102,7 @@ export default function (pi: ExtensionAPI) {
   const hintOf = (toolName: string): Tier | null =>
     pi.getAllTools().find((t) => t.name === toolName)?.annotations?.readOnlyHint ? "reversible" : null;
 
-  const gate = new Gate(cfg, sink, { principal: "user:me", agent: "pi" }, hintOf, (p) => normalizePath(p));
+  const gate = new Gate(cfg, sink, { principal: "user:me", agent: "pi" }, hintOf, makePaths(process.cwd()));
 
   for (const t of [inboxRead, emailDraft, emailSend, calendarCreate]) pi.registerTool(t);
 

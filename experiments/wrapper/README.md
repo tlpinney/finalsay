@@ -4,11 +4,19 @@ Wrap **any** agent in an OS sandbox whose protected set comes from the reversibi
 model. Catches shell writes and works regardless of the agent's internals — the half
 a per-agent tool-level gate can't do.
 
+`srt-outer.json` uses the placeholder `"PROJ"` for the project directory, so don't pass
+it to `srt` directly. Run through `srt-log.mjs` (below), which substitutes it, or
+substitute it yourself:
+
 ```sh
-nix develop .#default -c srt -s srt-outer.json -- pi -e ./path/to/gate chat
-nix develop .#default -c srt -s srt-outer.json -- codex exec "..."
-nix develop .#default -c srt -s srt-outer.json -- cursor-agent -p "..."
+sed "s#\"PROJ\"#\"$PWD\"#" experiments/wrapper/srt-outer.json > /path/outside/project/srt.json
+srt -s /path/outside/project/srt.json -- <agent> ...
 ```
+
+The policy allows no network and writes only inside the project (not `/tmp`, which
+the checkpoint doesn't cover). A real agent needs its model provider's domain in
+`allowedDomains`, and usually its own config and credential paths readable; add those
+per agent. Running real agents under it hasn't been recorded here yet.
 
 ## Generated from the policy, not hand-written
 
@@ -20,10 +28,11 @@ nix develop .#default -c srt -s srt-outer.json -- cursor-agent -p "..."
 ```
 
 Don't edit the JSON by hand; change `defaultOuter` and regenerate. Lean proves the
-generated policy denies **exactly** the writes the model classifies as irreversible
-(`generated_covers`, `generated_exact`), including a run-later name at any depth and in
-any letter case (`nested_case_variant_denied`). What Lean can't prove is that `srt`
-enforces `**/name` that way; that's the trusted assumption `probe.sh` checks.
+generator is faithful: the rendered globs deny exactly the paths with a segment matching
+`defaultOuter.runLater` (`generated_covers`, `generated_exact`), at any depth and under
+ASCII case folding (`nested_case_variant_denied`). That says nothing about whether the
+list is complete. What Lean can't prove is that `srt`
+enforces `**/name` that way; that's the trusted assumption `probe.sh` checks: every run-later name at the root, nested, and in upper case, plus `/tmp`, `$HOME` and an ordinary write (42/42 on macOS; not yet run on Linux).
 
 ## Log and stop: `srt-log.mjs`
 

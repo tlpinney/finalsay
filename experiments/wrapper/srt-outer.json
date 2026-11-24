@@ -15,4 +15,4 @@
    "**/.gitmodules",
    "**/.pre-commit-config.yaml"],
   "denyRead": ["~/.ssh", "~/.aws", "~/.gnupg"],
-  "allowWrite": ["PROJ", "/tmp"]}}
+  "allowWrite": ["PROJ"]}}

@@ -2,6 +2,7 @@ import FinalSay.Delegation
 import FinalSay.Conservation
 import FinalSay.Barrier
 import FinalSay.Frontier
+import FinalSay.Classify
 
 /-!
 # The composed system
@@ -53,6 +54,9 @@ sequence of operations from a fresh system:
 * `committed_within_budget`: the total amount of all committed effects never
   exceeds the root budget, however agents fork.
 * `no_amplification_system`, `released_once_system`, `rejected_never_released_system`.
+* `landed_classified_and_bound`: the tier that decides is the owner's classification
+  of the action (the proposer's claimed tier is ignored), and an irreversible effect's
+  approval was granted for that effect id, not just an identical-looking request.
 
 Related work: each component's property comes from prior work, cited in its own
 module: commit-time authorization and effect closure (Santos-Grueiro, arXiv
@@ -69,6 +73,12 @@ structure Proposal where
   id    : EffId
   agent : Nat
   req   : Request
+
+/-- What the gate does to a proposal on arrival: the tier is computed from the
+owner's tier map (the proposer's claimed tier is ignored; no hints), and the
+request is stamped with its effect id, so an approval can only match this effect. -/
+def Proposal.classify (q : Proposal) (tm : TierMap) : Proposal :=
+  { q with req := { q.req with tier := effectiveTier tm q.req.action none, eff := some q.id } }
 
 /-- Audit record of one passed commit-time check, with the state it was judged in. -/
 structure Record where
@@ -101,6 +111,8 @@ def tagsOf : Option Approval → List Nat → List Nat
   | none, _ => []
 
 structure System where
+  /-- The owner's classification. No operation changes it. -/
+  tiers : TierMap
   org   : Org
   store : Store := {}
   gate  : Gate := {}
@@ -158,8 +170,8 @@ def System.step (p : Policy) (s : System) : SOp → System
   | .propose q =>
     if s.props.any (fun q' => q'.id == q.id) then s
     else
-      let s := { s with props := s.props ++ [q] }
-      let d := (commitDecideAuth p s.org s.store q.req).decision
+      let s := { s with props := s.props ++ [q.classify s.tiers] }
+      let d := (commitDecideAuth p s.org s.store (q.classify s.tiers).req).decision
       if d = .deny then s
       else s.withGate p (s.gate.step (.submit q.id (d != .allow)))
   | .approve id => s.withGate p (s.gate.step (.decide id true))
@@ -180,8 +192,8 @@ def System.step (p : Policy) (s : System) : SOp → System
 def System.run (p : Policy) (s : System) (ops : List SOp) : System := ops.foldl (System.step p) s
 
 /-- A fresh system: one root principal with a root scope, one root agent. -/
-def System.fresh (root : String) (sc : Scope) (agent : Holder) : System :=
-  { org := { root, rootScope := sc }, pop := { agents := [agent] } }
+def System.fresh (tm : TierMap) (root : String) (sc : Scope) (agent : Holder) : System :=
+  { tiers := tm, org := { root, rootScope := sc }, pop := { agents := [agent] } }
 
 theorem System.run_cons (p : Policy) (s : System) (op : SOp) (ops : List SOp) :
     s.run p (op :: ops) = (s.step p op).run p ops := rfl
@@ -253,7 +265,7 @@ theorem step_sim (p : Policy) (s : System) (op : SOp) : Sim s (s.step p op) := b
     · exact Sim.refl s
     · split
       · exact Sim.refl _
-      · exact withGate_sim p { s with props := s.props ++ [q] } _
+      · exact withGate_sim p { s with props := s.props ++ [q.classify s.tiers] } _
   | approve id => exact withGate_sim p s _
   | reject id => exact withGate_sim p s _
   | cancel r => exact ⟨⟨[.cancel r], rfl⟩, ⟨[], rfl⟩, ⟨[], rfl⟩, ⟨[], rfl⟩⟩
@@ -430,7 +442,7 @@ theorem step_inv_sys (p : Policy) (s : System) (op : SOp) (h : s.Inv) : (s.step 
     · exact ⟨hw, hok, hlink, hspent⟩
     · split
       · exact ⟨hw, hok, hlink, hspent⟩
-      · exact (withGate_inv p { s with props := s.props ++ [q] } _ ⟨hw, hok, hlink, hspent⟩).1
+      · exact (withGate_inv p { s with props := s.props ++ [q.classify s.tiers] } _ ⟨hw, hok, hlink, hspent⟩).1
   | approve id => exact (withGate_inv p s _ ⟨hw, hok, hlink, hspent⟩).1
   | reject id => exact (withGate_inv p s _ ⟨hw, hok, hlink, hspent⟩).1
   | cancel r => exact ⟨hw, hok, hlink, hspent⟩
@@ -449,24 +461,110 @@ theorem run_inv_sys (p : Policy) (ops : List SOp) : ∀ (s : System), s.Inv → 
   | nil => intro s h; exact h
   | cons op ops ih => intro s h; exact ih _ (step_inv_sys p s op h)
 
-theorem fresh_inv (root : String) (sc : Scope) (agent : Holder) :
-    (System.fresh root sc agent).Inv := by
+theorem fresh_inv (tm : TierMap) (root : String) (sc : Scope) (agent : Holder) :
+    (System.fresh tm root sc agent).Inv := by
   refine ⟨by simp [Org.WithinRoot, System.fresh], by simp [System.fresh], by simp [System.fresh], ?_⟩
   simp [System.fresh]
+
+/-! ### The tier and the binding are the gate's, not the proposer's -/
+
+/-- A request as the gate stamps it: its tier is the owner's classification of
+its action, and it names its own effect id. -/
+def Classified (tm : TierMap) (id : EffId) (r : Request) : Prop :=
+  r.tier = effectiveTier tm r.action none ∧ r.eff = some id
+
+def System.Cls (s : System) : Prop :=
+  (∀ q ∈ s.props, Classified s.tiers q.id q.req) ∧ (∀ r ∈ s.recs, Classified s.tiers r.id r.req)
+
+theorem commitOne_cls (p : Policy) (s : System) (id : EffId) (h : s.Cls) :
+    (s.commitOne p id).Cls ∧ (s.commitOne p id).tiers = s.tiers := by
+  unfold System.commitOne
+  split
+  · exact ⟨h, rfl⟩
+  · next q hq =>
+    split
+    · refine ⟨⟨h.1, ?_⟩, rfl⟩
+      intro r hr
+      rcases List.mem_append.mp hr with hr | hr
+      · exact h.2 r hr
+      · simp only [List.mem_singleton] at hr
+        subst hr
+        have hid : q.id = id := by simpa using List.find?_some hq
+        obtain ⟨h1, h2⟩ := h.1 q (List.mem_of_find?_eq_some hq)
+        exact ⟨h1, by rw [h2, hid]⟩
+    · exact ⟨h, rfl⟩
+
+theorem foldl_commit_cls (p : Policy) (L : List EffId) : ∀ (s : System), s.Cls →
+    (L.foldl (System.commitOne p) s).Cls ∧ (L.foldl (System.commitOne p) s).tiers = s.tiers := by
+  induction L with
+  | nil => intro s h; exact ⟨h, rfl⟩
+  | cons id L ih =>
+    intro s h
+    obtain ⟨h1, t1⟩ := commitOne_cls p s id h
+    obtain ⟨h2, t2⟩ := ih _ h1
+    exact ⟨h2, t2.trans t1⟩
+
+theorem withGate_cls (p : Policy) (s : System) (g' : Gate) (h : s.Cls) :
+    (s.withGate p g').Cls ∧ (s.withGate p g').tiers = s.tiers :=
+  foldl_commit_cls p _ { s with gate := g' } h
+
+theorem step_cls (p : Policy) (s : System) (op : SOp) (h : s.Cls) :
+    (s.step p op).Cls ∧ (s.step p op).tiers = s.tiers := by
+  cases op with
+  | propose q =>
+    simp only [System.step]
+    split
+    · exact ⟨h, rfl⟩
+    · have h' : ({ s with props := s.props ++ [q.classify s.tiers] } : System).Cls := by
+        refine ⟨?_, h.2⟩
+        intro q' hq'
+        rcases List.mem_append.mp hq' with hq' | hq'
+        · exact h.1 q' hq'
+        · simp only [List.mem_singleton] at hq'
+          subst hq'
+          exact ⟨rfl, rfl⟩
+      split
+      · exact ⟨h', rfl⟩
+      · exact withGate_cls p _ _ h'
+  | approve id => exact withGate_cls p s _ h
+  | reject id => exact withGate_cls p s _ h
+  | cancel r => exact ⟨h, rfl⟩
+  | grant a => exact ⟨h, rfl⟩
+  | revokeApproval aid => exact ⟨h, rfl⟩
+  | tick => exact ⟨h, rfl⟩
+  | delegate id iss hol sc via => exact ⟨h, rfl⟩
+  | revokeDelegation lid => exact ⟨h, rfl⟩
+  | fork i c sh => exact ⟨h, rfl⟩
+  | deliver k => exact ⟨h, rfl⟩
+  | retry k => exact ⟨h, rfl⟩
+
+theorem run_cls (p : Policy) (ops : List SOp) : ∀ (s : System), s.Cls →
+    (s.run p ops).Cls ∧ (s.run p ops).tiers = s.tiers := by
+  induction ops with
+  | nil => intro s h; exact ⟨h, rfl⟩
+  | cons op ops ih =>
+    intro s h
+    obtain ⟨h1, t1⟩ := step_cls p s op h
+    obtain ⟨h2, t2⟩ := ih _ h1
+    exact ⟨h2, t2.trans t1⟩
+
+theorem fresh_cls (tm : TierMap) (root : String) (sc : Scope) (agent : Holder) :
+    (System.fresh tm root sc agent).Cls :=
+  ⟨by simp [System.fresh], by simp [System.fresh]⟩
 
 /-! ### End-to-end guarantees -/
 
 section
-variable (p : Policy) (root : String) (sc : Scope) (agent : Holder) (ops : List SOp)
+variable (p : Policy) (tm : TierMap) (root : String) (sc : Scope) (agent : Holder) (ops : List SOp)
 
 /-- **Every effect that lands was committed:** it traces to an audit record of a
 passed commit-time check, and the carrier names the approval that record used. -/
 theorem landed_was_committed :
-    ∀ c ∈ ((System.fresh root sc agent).run p ops).prov.landed,
-      ∃ r ∈ ((System.fresh root sc agent).run p ops).recs,
+    ∀ c ∈ ((System.fresh tm root sc agent).run p ops).prov.landed,
+      ∃ r ∈ ((System.fresh tm root sc agent).run p ops).recs,
         r.id = c.key ∧ c.grants = tagsOf r.via r.chain ∧ r.Ok := by
   intro c hc
-  obtain ⟨_, hok, hlink, _⟩ := run_inv_sys p ops _ (fresh_inv root sc agent)
+  obtain ⟨_, hok, hlink, _⟩ := run_inv_sys p ops _ (fresh_inv tm root sc agent)
   obtain ⟨r, hr, h1, h2⟩ := hlink c (List.mem_append_right _ hc)
   exact ⟨r, hr, h1, h2, hok r hr⟩
 
@@ -475,15 +573,15 @@ an approval covered exactly that effect, had not expired, had not been revoked,
 was given by someone holding authority over the effect, within the root's
 scope; and the landed carrier is tagged with that approval. -/
 theorem irreversible_landed_authorized (c : Carrier)
-    (hc : c ∈ ((System.fresh root sc agent).run p ops).prov.landed) :
-    ∃ r ∈ ((System.fresh root sc agent).run p ops).recs, r.id = c.key ∧
+    (hc : c ∈ ((System.fresh tm root sc agent).run p ops).prov.landed) :
+    ∃ r ∈ ((System.fresh tm root sc agent).run p ops).recs, r.id = c.key ∧
       (r.req.tier = .irreversible →
         ∃ a, r.via = some a ∧ c.grants = approvalTag a.id :: r.chain.map linkTag ∧
           a.target = r.req.target ∧
           r.store.now < a.expires ∧ a.id ∉ r.store.revoked ∧
           r.org.holds a.approver r.req.target r.store.now = true ∧
           r.org.rootScope.covers r.req.target r.store.now = true) := by
-  obtain ⟨r, hr, hid, hg, hw, _, hvia, hirr, _⟩ := landed_was_committed p root sc agent ops c hc
+  obtain ⟨r, hr, hid, hg, hw, _, hvia, hirr, _⟩ := landed_was_committed p tm root sc agent ops c hc
   refine ⟨r, hr, hid, fun ht => ?_⟩
   obtain ⟨a, ha⟩ := Option.isSome_iff_exists.mp (hirr ht)
   obtain ⟨_, hv, hh⟩ := hvia a ha
@@ -492,18 +590,40 @@ theorem irreversible_landed_authorized (c : Carrier)
   exact ⟨a, ha, by rw [hg, ha]; rfl, hv.1.1.1, hv.1.1.2, hv.1.2, hh,
     holds_within_root r.org hw _ _ _ hh⟩
 
+/-- **The owner's tier decides, and the approval names this effect:** for every
+landed effect, its audit record carries the owner's classification of the action
+(whatever tier the proposer claimed), and if that classification is irreversible,
+the approval that backed it was granted for this effect id and no other. -/
+theorem landed_classified_and_bound (c : Carrier)
+    (hc : c ∈ ((System.fresh tm root sc agent).run p ops).prov.landed) :
+    ∃ r ∈ ((System.fresh tm root sc agent).run p ops).recs, r.id = c.key ∧
+      r.req.tier = effectiveTier tm r.req.action none ∧
+      (effectiveTier tm r.req.action none = .irreversible →
+        ∃ a, r.via = some a ∧ a.target.eff = some c.key ∧
+          c.grants = approvalTag a.id :: r.chain.map linkTag) := by
+  obtain ⟨r, hr, hid, hirr⟩ := irreversible_landed_authorized p tm root sc agent ops c hc
+  obtain ⟨hcls, htiers⟩ := run_cls p ops _ (fresh_cls tm root sc agent)
+  obtain ⟨ht, he⟩ := hcls.2 r hr
+  rw [htiers] at ht
+  refine ⟨r, hr, hid, ht, fun hi => ?_⟩
+  obtain ⟨a, ha, hg, htgt, -⟩ := hirr (ht.trans hi)
+  refine ⟨a, ha, ?_, hg⟩
+  rw [htgt]
+  show r.req.eff = _
+  rw [he, hid]
+
 /-- **Revocation drains, end to end:** once approval `aid` is revoked, nothing it
 backed lands again, whether it was in flight, redelivered, or attempted later. -/
 theorem revocation_drains_system (pre post : List SOp) (aid : Nat) :
-    let mid := (System.fresh root sc agent).run p (pre ++ [.revokeApproval aid])
-    ∃ new, ((System.fresh root sc agent).run p (pre ++ .revokeApproval aid :: post)).prov.landed =
+    let mid := (System.fresh tm root sc agent).run p (pre ++ [.revokeApproval aid])
+    ∃ new, ((System.fresh tm root sc agent).run p (pre ++ .revokeApproval aid :: post)).prov.landed =
         mid.prov.landed ++ new ∧ ∀ c ∈ new, approvalTag aid ∉ c.grants := by
   intro mid
   have e : pre ++ SOp.revokeApproval aid :: post = (pre ++ [.revokeApproval aid]) ++ post := by simp
   rw [e, System.run_append]
   obtain ⟨-, -, ⟨fs, hfs⟩, -⟩ := run_sim p post mid
   rw [hfs]
-  obtain ⟨-, -, ⟨fs0, hfs0⟩, -⟩ := run_sim p (pre ++ [.revokeApproval aid]) (System.fresh root sc agent)
+  obtain ⟨-, -, ⟨fs0, hfs0⟩, -⟩ := run_sim p (pre ++ [.revokeApproval aid]) (System.fresh tm root sc agent)
   apply drains_from
   · show mid.prov.Drained
     rw [hfs0]; exact run_drained _ _ (by simp [Provider.Drained, System.fresh])
@@ -513,35 +633,35 @@ theorem revocation_drains_system (pre post : List SOp) (aid : Nat) :
 
 /-- **Each effect lands at most once**, end to end. -/
 theorem lands_once_system :
-    (((System.fresh root sc agent).run p ops).prov.landed.map Carrier.key).Nodup := by
-  obtain ⟨-, -, ⟨fs, hfs⟩, -⟩ := run_sim p ops (System.fresh root sc agent)
+    (((System.fresh tm root sc agent).run p ops).prov.landed.map Carrier.key).Nodup := by
+  obtain ⟨-, -, ⟨fs, hfs⟩, -⟩ := run_sim p ops (System.fresh tm root sc agent)
   rw [hfs]; exact key_lands_at_most_once fs
 
 /-- **Each effect leaves the gate at most once.** -/
-theorem released_once_system : ((System.fresh root sc agent).run p ops).gate.released.Nodup := by
-  obtain ⟨⟨gs, hgs⟩, -⟩ := run_sim p ops (System.fresh root sc agent)
+theorem released_once_system : ((System.fresh tm root sc agent).run p ops).gate.released.Nodup := by
+  obtain ⟨⟨gs, hgs⟩, -⟩ := run_sim p ops (System.fresh tm root sc agent)
   rw [hgs]; exact lands_at_most_once gs
 
 /-- **A rejected effect never leaves the gate.** -/
 theorem rejected_never_released_system (x : EffId)
-    (hx : x ∈ ((System.fresh root sc agent).run p ops).gate.rejected) :
-    x ∉ ((System.fresh root sc agent).run p ops).gate.released := by
-  obtain ⟨⟨gs, hgs⟩, -⟩ := run_sim p ops (System.fresh root sc agent)
+    (hx : x ∈ ((System.fresh tm root sc agent).run p ops).gate.rejected) :
+    x ∉ ((System.fresh tm root sc agent).run p ops).gate.released := by
+  obtain ⟨⟨gs, hgs⟩, -⟩ := run_sim p ops (System.fresh tm root sc agent)
   rw [hgs] at hx ⊢; exact rejected_never_lands gs x hx
 
 /-- **The committed total stays within the root budget**, however agents fork. -/
 theorem committed_within_budget :
-    ((((System.fresh root sc agent).run p ops).recs.map (fun r => r.req.amount)).sum) ≤ agent.budget := by
-  obtain ⟨-, -, -, hspent⟩ := run_inv_sys p ops _ (fresh_inv root sc agent)
-  obtain ⟨-, -, -, ⟨ps, hps⟩⟩ := run_sim p ops (System.fresh root sc agent)
+    ((((System.fresh tm root sc agent).run p ops).recs.map (fun r => r.req.amount)).sum) ≤ agent.budget := by
+  obtain ⟨-, -, -, hspent⟩ := run_inv_sys p ops _ (fresh_inv tm root sc agent)
+  obtain ⟨-, -, -, ⟨ps, hps⟩⟩ := run_sim p ops (System.fresh tm root sc agent)
   rw [← hspent, hps]
   exact spent_le_root agent ps
 
 /-- **No amplification**, end to end: nobody ever holds authority the root lacked. -/
 theorem no_amplification_system (who : String) (t : Target) (now : Nat)
-    (hh : ((System.fresh root sc agent).run p ops).org.holds who t now = true) :
+    (hh : ((System.fresh tm root sc agent).run p ops).org.holds who t now = true) :
     sc.covers t now = true := by
-  obtain ⟨-, ⟨os, hos⟩, -⟩ := run_sim p ops (System.fresh root sc agent)
+  obtain ⟨-, ⟨os, hos⟩, -⟩ := run_sim p ops (System.fresh tm root sc agent)
   rw [hos] at hh
   exact no_amplification root sc os who t now hh
 
@@ -549,8 +669,8 @@ theorem no_amplification_system (who : String) (t : Target) (now : Nat)
 revoked, nothing lands whose approver's authority ran through `lid` (directly or
 through a link delegated beneath it), whether in flight, redelivered or later. -/
 theorem delegation_revocation_drains_system (pre post : List SOp) (lid : Nat) :
-    let mid := (System.fresh root sc agent).run p (pre ++ [.revokeDelegation lid])
-    ∃ new, ((System.fresh root sc agent).run p (pre ++ .revokeDelegation lid :: post)).prov.landed =
+    let mid := (System.fresh tm root sc agent).run p (pre ++ [.revokeDelegation lid])
+    ∃ new, ((System.fresh tm root sc agent).run p (pre ++ .revokeDelegation lid :: post)).prov.landed =
         mid.prov.landed ++ new ∧ ∀ c ∈ new, linkTag lid ∉ c.grants := by
   intro mid
   have e : pre ++ SOp.revokeDelegation lid :: post = (pre ++ [.revokeDelegation lid]) ++ post := by
@@ -559,7 +679,7 @@ theorem delegation_revocation_drains_system (pre post : List SOp) (lid : Nat) :
   obtain ⟨-, -, ⟨fs, hfs⟩, -⟩ := run_sim p post mid
   rw [hfs]
   obtain ⟨-, -, ⟨fs0, hfs0⟩, -⟩ :=
-    run_sim p (pre ++ [.revokeDelegation lid]) (System.fresh root sc agent)
+    run_sim p (pre ++ [.revokeDelegation lid]) (System.fresh tm root sc agent)
   apply drains_from
   · show mid.prov.Drained
     rw [hfs0]; exact run_drained _ _ (by simp [Provider.Drained, System.fresh])
@@ -603,7 +723,7 @@ theorem barrier_system (p : Policy) (s : System) (op : SOp) (r : Nat) (hinv : s.
     · split
       · exact ⟨[], by simp, by simp⟩
       · obtain ⟨hw, hok, hlink, hspent⟩ := hinv
-        exact viaGate { s with props := s.props ++ [q] } _ ⟨hw, hok, hlink, hspent⟩ hb
+        exact viaGate { s with props := s.props ++ [q.classify s.tiers] } _ ⟨hw, hok, hlink, hspent⟩ hb
           (by intro id ap h; cases h)
   | approve id =>
     exact viaGate s _ hinv hb (by intro id' ap h; cases h; exact hop id (Or.inl rfl))
@@ -621,9 +741,9 @@ theorem barrier_system (p : Policy) (s : System) (op : SOp) (r : Nat) (hinv : s.
 
 /-- Every reachable state satisfies the invariant (so `barrier_system` applies at
 every step of every run from a fresh system). -/
-theorem reachable_inv (p : Policy) (root : String) (sc : Scope) (agent : Holder) (ops : List SOp) :
-    ((System.fresh root sc agent).run p ops).Inv :=
-  run_inv_sys p ops _ (fresh_inv root sc agent)
+theorem reachable_inv (p : Policy) (tm : TierMap) (root : String) (sc : Scope) (agent : Holder) (ops : List SOp) :
+    ((System.fresh tm root sc agent).run p ops).Inv :=
+  run_inv_sys p ops _ (fresh_inv tm root sc agent)
 
 /-! ### Cancellation fences, end to end -/
 
@@ -649,7 +769,7 @@ theorem step_fenced_sys (p : Policy) (s : System) (op : SOp) (hi : s.Inv) (hf : 
     · split
       · exact ⟨[], by simp, by simp⟩
       · obtain ⟨hw, hok, hlink, hspent⟩ := hi
-        exact viaGate { s with props := s.props ++ [q] } _ ⟨hw, hok, hlink, hspent⟩ hf
+        exact viaGate { s with props := s.props ++ [q.classify s.tiers] } _ ⟨hw, hok, hlink, hspent⟩ hf
   | approve id => exact viaGate s _ hi hf
   | reject id => exact viaGate s _ hi hf
   | _ => exact ⟨[], by simp [System.step], by simp⟩
@@ -674,17 +794,17 @@ theorem cancel_from (p : Policy) (r : Nat) (post : List SOp) : ∀ (s : System),
 
 /-- **B4, end to end:** after run `r` is cancelled, nothing of `r` is committed
 again, including effects that were waiting and effects a late branch proposes. -/
-theorem cancel_fences_system (p : Policy) (root : String) (sc : Scope) (agent : Holder)
+theorem cancel_fences_system (p : Policy) (tm : TierMap) (root : String) (sc : Scope) (agent : Holder)
     (pre post : List SOp) (r : Nat) :
-    let mid := (System.fresh root sc agent).run p (pre ++ [.cancel r])
-    ∃ new, ((System.fresh root sc agent).run p (pre ++ .cancel r :: post)).recs =
+    let mid := (System.fresh tm root sc agent).run p (pre ++ [.cancel r])
+    ∃ new, ((System.fresh tm root sc agent).run p (pre ++ .cancel r :: post)).recs =
         mid.recs ++ new ∧ ∀ x ∈ new, x.id.1 ≠ r := by
   intro mid
   have e : pre ++ SOp.cancel r :: post = (pre ++ [.cancel r]) ++ post := by simp
   rw [e, System.run_append]
-  obtain ⟨⟨gs, hgs⟩, -⟩ := run_sim p (pre ++ [.cancel r]) (System.fresh root sc agent)
+  obtain ⟨⟨gs, hgs⟩, -⟩ := run_sim p (pre ++ [.cancel r]) (System.fresh tm root sc agent)
   apply cancel_from
-  · exact reachable_inv p root sc agent _
+  · exact reachable_inv p tm root sc agent _
   · show mid.gate.Fenced
     rw [hgs]; exact run_fenced gs _ (by simp [Gate.Fenced, System.fresh])
   · show r ∈ mid.gate.cancelled
@@ -777,8 +897,8 @@ theorem step_once_sys (p : Policy) (s : System) (op : SOp) (h : s.Once) : (s.ste
   | _ => exact ⟨hnd, hused⟩
 
 /-- **Each single-use approval backs at most one committed effect**, end to end. -/
-theorem single_use_system (p : Policy) (root : String) (sc : Scope) (agent : Holder)
-    (ops : List SOp) : (oneShotRecs ((System.fresh root sc agent).run p ops).recs).Nodup := by
+theorem single_use_system (p : Policy) (tm : TierMap) (root : String) (sc : Scope) (agent : Holder)
+    (ops : List SOp) : (oneShotRecs ((System.fresh tm root sc agent).run p ops).recs).Nodup := by
   suffices ∀ s : System, s.Once → (s.run p ops).Once from
     (this _ ⟨by simp [oneShotRecs, System.fresh], by simp [oneShotRecs, System.fresh]⟩).1
   induction ops with
@@ -924,9 +1044,9 @@ theorem step_sync (p : Policy) (s : System) (op : SOp) (h : s.Sync) : (s.step p 
 
 /-- In every reachable state, a passed commit-time check is never refused at the
 provider. -/
-theorem committed_never_refused_at_dispatch (p : Policy) (root : String) (sc : Scope)
+theorem committed_never_refused_at_dispatch (p : Policy) (tm : TierMap) (root : String) (sc : Scope)
     (agent : Holder) (ops : List SOp) (r : Request) :
-    let s := (System.fresh root sc agent).run p ops
+    let s := (System.fresh tm root sc agent).run p ops
     ∀ g ∈ tagsOf (s.store.pickAuth s.org r) (s.chainFor (s.store.pickAuth s.org r) r),
       g ∉ s.prov.revoked := by
   intro s
@@ -951,8 +1071,12 @@ def note : Request :=
   { principal := "user:me", agent := "agent", action := "notes.write", resource := "acct",
     tier := .reversible }
 def approval : Approval :=
-  { id := 1, target := refund.target, approver := "user:me", expires := 10 }
-def sys0 : System := System.fresh "user:me" scope ⟨"agent", 1000, []⟩
+  { id := 1, target := { refund.target with eff := some (1, 0) }, approver := "user:me",
+    expires := 10 }
+def tiers : TierMap :=
+  { entries := [{ action := "bank.refund", tier := .irreversible },
+                { action := "notes.write", tier := .reversible }] }
+def sys0 : System := System.fresh tiers "user:me" scope ⟨"agent", 1000, []⟩
 
 /-- Propose an irreversible refund (asks) and, in the same run, a note (allowed but
 held behind the ask); the root grants and approves; the provider delivers. -/
@@ -975,7 +1099,8 @@ provider delivers. -/
 def mgrScope : Scope :=
   { actions := ["bank.refund"], resources := ["acct"], maxAmount := 1000, expires := 100 }
 def mgrApproval : Approval :=
-  { id := 2, target := refund.target, approver := "user:mgr", expires := 10 }
+  { id := 2, target := { refund.target with eff := some (2, 0) }, approver := "user:mgr",
+    expires := 10 }
 def delegated (revoke : Bool) : List SOp :=
   [.delegate 5 "user:me" "user:mgr" mgrScope none, .propose ⟨(2, 0), 0, refund⟩,
    .grant mgrApproval, .approve (2, 0)] ++
@@ -988,6 +1113,26 @@ theorem delegation_drain_example :
     (sys0.run policy (delegated false)).prov.landed =
       [⟨(2, 0), [approvalTag 2, linkTag 5]⟩] ∧
     (sys0.run policy (delegated true)).prov.landed = [] := by
+  decide
+
+/-- A proposer claims a $500 refund is reversible, under a policy that allows
+anything reversible. The gate re-classifies it from the owner's map (irreversible),
+so it asks, and with no approval nothing lands. -/
+def spoofPolicy : Policy := [⟨"rev-ok", .allow, .tierIs .reversible⟩]
+def spoofed : List SOp := [.propose ⟨(1, 0), 0, { refund with tier := .reversible }⟩, .deliver (1, 0)]
+
+theorem spoofed_tier_ignored : (sys0.run spoofPolicy spoofed).prov.landed = [] := by
+  decide
+
+/-- Two identical refunds; the human approves the first. The approval is bound to
+effect (1, 0), so the second request cannot consume it, even though action,
+resource and amount match; the first still lands with it. -/
+def capture : List SOp :=
+  [.propose ⟨(1, 0), 0, refund⟩, .propose ⟨(2, 0), 0, refund⟩, .grant approval,
+   .approve (2, 0), .approve (1, 0), .deliver (2, 0), .deliver (1, 0)]
+
+theorem approval_not_captured :
+    (sys0.run policy capture).prov.landed = [⟨(1, 0), [approvalTag approval.id]⟩] := by
   decide
 
 end pipelineExample

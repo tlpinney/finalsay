@@ -67,7 +67,17 @@
       {
         "action": "file.write.exec",
         "tier": "irreversible",
-        "note": "files something outside the sandbox runs later: an edge to your full permissions. Covers run-later config at ANY depth (matched by path segment), including other agents' project config dirs \u2014 a sandbox that only protects <root>/.codex misses a nested one; this does not."
+        "note": "files something outside the sandbox runs later: an edge to your full permissions. Covers run-later config at ANY depth (matched by path segment), including other agents' project config dirs — a sandbox that only protects <root>/.codex misses a nested one; this does not."
+      },
+      {
+        "action": "file.write.outside",
+        "tier": "irreversible",
+        "note": "a write outside the project root: the checkpoint can't undo it"
+      },
+      {
+        "action": "file.write.nested-repo",
+        "tier": "irreversible",
+        "note": "a write inside a git repo nested in the project: the checkpoint stores it as a pointer, not its files, so it can't be restored"
       }
     ]
   },

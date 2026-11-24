@@ -8,8 +8,12 @@
 #
 # Store: $AGENT_CHECKPOINTS (default ~/.agent-checkpoints), one shadow git
 # repository per project path. The project's own .git is never touched.
-# Note: the project's .gitignore applies, and anything not ignored (including
-# secrets such as .env) is copied into the store.
+# Ignored files are included (node_modules, build output, .env): a planted
+# node_modules/.bin/x runs later just like a tracked file, so the undo has to
+# cover it. That makes snapshots bigger, and secrets are copied into the store.
+# Not covered: git repositories nested in the project (a directory below the root
+# with its own .git) are stored as a pointer, not their files. The gate treats
+# writes there as irreversible (file.write.nested-repo).
 set -eu
 cmd=${1:-}; shift || true
 rev=""
@@ -31,15 +35,15 @@ init() {
 case "$cmd" in
   save)
     init
-    g add -A
+    g add -A -f             # -f: include ignored files too
     g commit -q --allow-empty -m "checkpoint $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     g rev-parse --short HEAD ;;
   list)
     g log --format='%h %s' ;;
   restore)
     g reset -q --hard "$rev"
-    g clean -qfd            # removes new files; .git is excluded, so it stays
+    g clean -qfdx -e .git   # removes new files, ignored ones too; keeps the project's .git
     echo "restored $proj to $rev" ;;
   *)
-    sed -n '2,13p' "$0"; exit 2 ;;
+    sed -n '2,17p' "$0"; exit 2 ;;
 esac

@@ -86,7 +86,9 @@ structure SrtPolicy where
 def generate (o : Outer) : SrtPolicy where
   denyWrite := o.runLater.map .anyDepth
   denyRead := o.denyRead
-  allowWrite := ["PROJ", "/tmp"]
+  -- Only the project: it is what the checkpoint covers. `/tmp` isn't, so a write
+  -- there couldn't be undone (point TMPDIR inside the project instead).
+  allowWrite := ["PROJ"]
   allowedDomains := o.allowedDomains
 
 def SrtPolicy.deniesWrite (sp : SrtPolicy) (p : Path) : Bool :=

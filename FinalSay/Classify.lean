@@ -62,8 +62,8 @@ information across the boundary, and that can't be taken back.
 
 The three conditions are Simon Willison's "lethal trifecta" (private data,
 untrusted content, external communication;
-https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/). What's added here
-is treating every observable action as a channel and escalating it by tier. -/
+https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/). Here every observable
+action is treated as a channel and escalated by tier. -/
 
 /-- What the session has been exposed to so far. -/
 structure Exposure where

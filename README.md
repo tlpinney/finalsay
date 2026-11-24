@@ -8,8 +8,8 @@ A decision carries real authority only if it can't be undone. So instead of aski
 
 | Tier | Meaning | Who decides |
 |---|---|---|
-| **Reversible** | The exact prior state can be restored, with no trace (a file under git, a draft) | The agent |
-| **Compensatable** | Can't be undone, but a declared compensating action counteracts it, leaving a trace (a refund, a calendar invite) | Policy |
+| **Reversible** | Can still be prevented, or the state that matters restored, from inside a boundary you control, before anything outside it acts on it (a draft, a file under a checkpoint) | The agent |
+| **Compensatable** | Can't be undone, but a declared compensating action counteracts it at a bounded, known cost (a refund, a calendar invite) | Policy |
 | **Irreversible** | No restoration, no adequate compensation (a sent email, a leaked secret) | A human with authority |
 
 This repo is a **toy reference implementation in [Lean 4](https://lean-lang.org/)**: the model, proofs that its rules hold for *every* policy, a small simulated agent, and conformance fixtures so the same model can be implemented in Cedar, OPA, or anything else.
@@ -70,10 +70,11 @@ Five rules every implementation must keep. In Lean they're proved for all polici
 
 ### All of it together (`FinalSay/System.lean`)
 
-One system holds a delegation org, an approval store, the run gate, a provider, and an agent population with budgets. An effect is proposed. The policy decides: deny drops it; allow submits it to the gate; ask submits it as needing approval, which holds its whole run. Whatever the gate releases passes **one commit-time check**: policy, an exact/current/unused approval from someone with authority, and the agent's budget. A passing check consumes the approval, spends the budget, hands a carrier to the provider, and writes an audit record of the state it was judged in.
+One system holds the owner's tier map, a delegation org, an approval store, the run gate, a provider, and an agent population with budgets. An effect is proposed. The gate ignores any tier the proposer claims: it classifies the action from the owner's map and binds the request to its proposal's effect id, so an approval can only be used for the effect it was granted for. (The model takes the id from the proposal; a real gate must assign ids itself.) Then the policy decides: deny drops it; allow submits it to the gate; ask submits it as needing approval, which holds its whole run. Whatever the gate releases passes **one commit-time check**: policy, an exact/current/unused approval from someone with authority, and the agent's budget. A passing check consumes the approval, spends the budget, hands a carrier to the provider, and writes an audit record of the state it was judged in.
 
 Each component changes only through its own step function (`run_sim`), so every component theorem holds inside the system. On top of that, for every policy and every sequence of operations from a fresh system:
 - every effect that lands traces to an audit record of a passed commit-time check (`landed_was_committed`);
+- the tier that decided is the owner's classification, and an irreversible effect's approval was granted for that effect id, not for an identical-looking request (`landed_classified_and_bound`; examples `spoofed_tier_ignored`, `approval_not_captured`);
 - an irreversible effect that lands was backed, at commit, by an approval covering exactly it, unexpired, unrevoked, from someone holding authority over it within the root's scope; and the carrier names that approval (`irreversible_landed_authorized`);
 - after an approval is revoked, nothing it backed lands, in flight or redelivered (`revocation_drains_system`);
 - each effect lands at most once (`lands_once_system`) and leaves the gate at most once (`released_once_system`); rejected effects never leave (`rejected_never_released_system`);
@@ -85,9 +86,9 @@ Each component changes only through its own step function (`run_sim`), so every 
 - each single-use approval backs at most one commit (`single_use_system`);
 - and the pipeline isn't vacuous: a concrete run holds a sibling behind an ask, then lands both after approval (`pipeline_lands`); another lands a manager-approved refund, or drains it if the manager's delegation is revoked first (`delegation_drain_example`).
 
-**Where these come from.** The individual properties aren't new. Commit-time authorization and effect closure come from Santos-Grueiro (also machine-checked, in Lean). Barrier semantics come from Khan (verified in Verus and TLA+). Attenuation comes from Tallam, and conservation from Zhu & Wang. What this repo adds:
-- placing all of them at the one point reversibility selects (the commit/frontier);
-- a checked model showing they compose in one system.
+**Where these come from.** Commit-time authorization and effect closure come from Santos-Grueiro (also machine-checked, in Lean). Barrier semantics come from Khan (verified in Verus and TLA+). Attenuation comes from Tallam, and conservation from Zhu & Wang. Magentic-UI's action guard and Waghmare & Sufi's reversibility classes also use irreversibility to decide who approves (see `paper.md` §8).
+
+**What's proved, and what isn't.** The theorems prove the authorization machinery *given* the owner's tier map: if the map says irreversible, the guarantees hold whatever the agent claims. Whether the map is right, and the definition of reversibility itself, aren't formalized. The composed system doesn't include the trifecta rule. Operations are assumed atomic, and only authenticated principals are assumed to grant, delegate and revoke.
 
 **Honest limits.**
 - Budgets are conserved across forks. Approvals, though, live in one shared store rather than being held by individual agents.
@@ -225,22 +226,27 @@ Every step was individually permitted until the last send; the deny rule stopped
 | `decisions` | 360 | request + policy → expected `decision` and `rule`; each case lists the invariants it exercises |
 | `classification` | 240 | tier map + action + hint + session exposure → expected tier (cases exercising the trifecta rule are tagged `4c-trifecta`) |
 | `malformed` | 2 | unparseable input + mode → expected decision |
-| `system.cases` | 615 | composed system (invariants 6–10): a sequence of operations (propose, approve, reject, cancel, grant, revoke approval, tick, delegate, revoke delegation, fork, deliver, retry) → expected landed carriers and their tags, audit records, gate released/rejected, approvals used, amount spent. There are 15 named scenarios plus 600 runs from a fixed seed |
+| `system.cases` | 617 | composed system (invariants 6–10): a sequence of operations (propose, approve, reject, cancel, grant, revoke approval, tick, delegate, revoke delegation, fork, deliver, retry) → expected landed carriers and their tags, audit records, gate released/rejected, approvals used, amount spent. There are 17 named scenarios plus 600 runs from a fixed seed. Proposals may claim any tier (some random runs claim the wrong one); the system classifies with the owner's `tierMap` in the config and binds approvals to the effect id |
 
-An implementation **conforms** if it reproduces every expected answer. `examples/python/check.py` is an independent, standard-library-only implementation written from this README; it passes all 602. A deliberately broken variant (default `allow` instead of `ask`) fails 39 cases, all tagged `3-no-rule-asks`; one without the trifecta rule fails 17, all tagged `4c-trifecta`.
+An implementation **conforms** if it reproduces every expected answer. `examples/python/check.py` is a second, standard-library-only implementation, written from this README by the same author (so not independent in the strong sense); it passes all 1,219 (602 decision-core cases, plus the 617 system cases through `composed.py`). On the 602 core cases, a deliberately broken variant (default `allow` instead of `ask`) fails 39, all tagged `3-no-rule-asks`; one without the trifecta rule fails 17, all tagged `4c-trifecta`.
 
-The composed system is replayed by `examples/python/composed.py`, a second standard-library implementation; it reproduces all 615 system cases. `examples/python/mutate.py` checks the corpus is strong enough to certify it. It breaks one guarantee at a time and counts the cases that notice:
+The composed system is replayed by `examples/python/composed.py`, a second standard-library implementation; it reproduces all 617 system cases. `examples/python/mutate.py` checks the corpus is strong enough to certify it. It breaks one guarantee at a time and counts the cases that notice:
 
 | Broken guarantee | Failing cases |
 |---|---|
-| Provider fence | 205 |
-| Run barrier (per-branch pause) | 99 |
-| Approver authority | 336 |
-| Idempotency bind | 84 |
-| Revocation cascade | 107 |
-| Fork conservation (copy-on-fork) | 91 |
-| Single use | 24 |
-| Attenuation | 93 |
+| Provider fence | 194 |
+| Run barrier (per-branch pause) | 129 |
+| Approver authority | 216 |
+| Idempotency bind | 66 |
+| Revocation cascade | 82 |
+| Fork conservation (copy-on-fork) | 71 |
+| Single use | 9 |
+| Attenuation | 77 |
+| Proposer's claimed tier trusted | 59 |
+| Approval not bound to the effect | 82 |
+| Expiry ignored | 1 |
+
+Expiry is caught by only one case, so that part of the corpus is still thin.
 
 One mutant is equivalent by design and fails 0 cases: the provider refusing to dispatch under a revoked tag. In the composed system the commit-time check has already refused anything a revoked approval or delegation backed, so the provider's own refusal is defence in depth. That's proved, not just observed: `committed_never_refused_at_dispatch` shows that in every reachable state, a commit's tags are never ones the provider has revoked.
 
@@ -266,8 +272,8 @@ Conditions in policies are a tiny language (`always`, `actionIs`, `actionPrefix`
 | `FinalSay/System.lean` | Invariants 6–10 composed into one system, with end-to-end theorems |
 | `FinalSay/SystemFixtures.lean` | Composed-system fixtures: named scenarios + seeded random runs |
 | `FinalSay/Config.lean` | Reads a tier map and policy from JSON, so any harness's trace can be audited (`audit F --config C`) |
-| `examples/python/check.py` | Independent implementation checked against the fixtures |
-| `examples/python/composed.py` | Independent implementation of the composed system |
+| `examples/python/check.py` | Second implementation of the decision core, checked against the fixtures |
+| `examples/python/composed.py` | Second implementation of the composed system |
 | `examples/python/mutate.py` | Mutation test: does the corpus catch each broken guarantee? |
 | `examples/pi/` | A [pi](https://pi.dev) extension implementing the model, including code mode; its traces pass the Lean audit. Also a hardened `srt` config and an outside-the-project checkpoint script |
 | `paper.md` | The write-up: the framework, prior work through it, the composed system, and run-later writes |

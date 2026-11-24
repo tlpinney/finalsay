@@ -64,7 +64,22 @@ class Org:
 # ---- approvals --------------------------------------------------------------
 
 def target(req):
-    return dict(action=req["action"], resource=req["resource"], amount=req["context"]["amount"])
+    # `eff` binds an approval to one effect id; the system stamps it on propose.
+    return dict(action=req["action"], resource=req["resource"], amount=req["context"]["amount"],
+                eff=req.get("eff"))
+
+
+# ---- classification -----------------------------------------------------------
+
+def effective_tier(tier_map, action):
+    """The owner's tier for an action: compensatable without a declared compensation
+    counts as irreversible, and unknown actions are irreversible (no hints)."""
+    e = next((e for e in tier_map if e["action"] == action), None)
+    if e is None:
+        return "irreversible"
+    if e["tier"] == "compensatable" and e.get("compensation") is None:
+        return "irreversible"
+    return e["tier"]
 
 
 class Store:
@@ -191,7 +206,13 @@ class System:
         self.org = Org(config["root"], config["rootScope"])
         self.store, self.gate, self.prov = Store(), Gate(), Provider()
         self.pop = Pop(config["agent"])
+        self.tier_map = config["tierMap"]
         self.props, self.recs = [], []
+
+    def classify(self, request, i):
+        """The proposer's claimed tier is ignored: the owner's map decides, and the
+        request is stamped with its effect id so approvals bind to this effect."""
+        return dict(request, tier=effective_tier(self.tier_map, request["action"]), eff=list(i))
 
     def decide(self, req):
         return commit_decide_auth(self.evaluate, self.policy, self.org, self.store, req)
@@ -224,8 +245,9 @@ class System:
             i = tid(op["id"])
             if any(q["id"] == i for q in self.props):
                 return
-            self.props.append(dict(id=i, agent=op["agent"], request=op["request"]))
-            d = self.decide(op["request"])
+            req = self.classify(op["request"], i)
+            self.props.append(dict(id=i, agent=op["agent"], request=req))
+            d = self.decide(req)
             if d == "deny":
                 return
             self.through_gate(lambda: self.gate.submit(i, d != "allow"))
